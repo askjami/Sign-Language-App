@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign Language to Text</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #eee;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      font-size: 2em;
+      margin-top: 20px;
+    }
+    #webcam {
+      margin-top: 20px;
+      border: 2px solid #ccc;
+      width: 90vw;
+      max-width: 640px;
+      height: auto;
+      aspect-ratio: 4 / 3;
+    }
+    #output, #buffer {
+      font-size: 1.5em;
+      margin: 15px auto;
+      color: #00ff90;
+      max-width: 90vw;
+      word-wrap: break-word;
+    }
+    #clear {
+      background: #00ff90;
+      border: none;
+      padding: 10px 20px;
+      font-size: 1em;
+      margin-bottom: 20px;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sign Language to Text</h1>
+  <video id="webcam" autoplay playsinline></video>
+  <div id="output">Loading model...</div>
+  <div id="buffer"></div>
+  <button id="clear">Clear</button>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const output = document.getElementById('output');
+    const bufferEl = document.getElementById('buffer');
+    const clearBtn = document.getElementById('clear');
+
+    let bufferText = '';
+    let lastStableGesture = '';
+    let stableStartTime = 0;
+    const STABLE_DURATION = 1200; // milliseconds
+
+    const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
+
+    function defineGestures() {
+      const gestures = [];
+
+      // A–Z Letters (simple placeholders)
+      for (let c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+        const g = new GestureDescription(c);
+        Finger.all.forEach(f => g.addCurl(f, FingerCurl.FullCurl, 0.5));
+        g.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0); // distinguish a bit
+        gestures.push(g);
+      }
+
+      // Helper for full word gestures
+      function wordGesture(name, curlMap = {}, dirMap = {}) {
+        const g = new GestureDescription(name);
+        Finger.all.forEach(f => {
+          g.addCurl(f, curlMap[f] ?? FingerCurl.NoCurl, 1.0);
+          if (dirMap[f]) g.addDirection(f, dirMap[f], 1.0);
+        });
+        return g;
+      }
+
+      gestures.push(wordGesture("Hello")); // Flat hand
+      gestures.push(wordGesture("Yes", { [Finger.Thumb]: FingerCurl.FullCurl })); // Fist
+      gestures.push(wordGesture("No", {
+        [Finger.Index]: FingerCurl.NoCurl,
+        [Finger.Middle]: FingerCurl.NoCurl,
+        [Finger.Ring]: FingerCurl.FullCurl,
+        [Finger.Pinky]: FingerCurl.FullCurl,
+        [Finger.Thumb]: FingerCurl.FullCurl
+      }));
+      gestures.push(wordGesture("Thanks"));
+      gestures.push(wordGesture("Please"));
+      gestures.push(wordGesture("Stop"));
+
+      // Love: thumb + index + pinky extended
+      const Love = new GestureDescription("Love");
+      Love.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0);
+      Love.addCurl(Finger.Pinky, FingerCurl.NoCurl, 1.0);
+      Love.addCurl(Finger.Thumb, FingerCurl.NoCurl, 1.0);
+      Love.addCurl(Finger.Middle, FingerCurl.FullCurl, 1.0);
+      Love.addCurl(Finger.Ring, FingerCurl.FullCurl, 1.0);
+      gestures.push(Love);
+
+      // Help: Thumb up, other fingers curled
+      const Help = new GestureDescription("Help");
+      Help.addCurl(Finger.Thumb, FingerCurl.NoCurl, 1.0);
+      [Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky].forEach(f =>
+        Help.addCurl(f, FingerCurl.FullCurl, 1.0)
+      );
+      gestures.push(Help);
+
+      // Fine: all fingers extended, vertical up
+      const Fine = new GestureDescription("Fine");
+      Finger.all.forEach(f => {
+        Fine.addCurl(f, FingerCurl.NoCurl, 1.0);
+        Fine.addDirection(f, FingerDirection.VerticalUp, 1.0);
+      });
+      gestures.push(Fine);
+
+      // Good: flat hand diagonal up right
+      const Good = new GestureDescription("Good");
+      Finger.all.forEach(f => {
+        Good.addCurl(f, FingerCurl.NoCurl, 1.0);
+        Good.addDirection(f, FingerDirection.DiagonalUpRight, 1.0);
+      });
+      gestures.push(Good);
+
+      return gestures;
+    }
+
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' }
+      });
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve(video);
+      });
+    }
+
+    async function main() {
+      await setupCamera();
+      await tf.setBackend('webgl');
+      await tf.ready();
+
+      const model = await handpose.load();
+      const GE = new fp.GestureEstimator(defineGestures());
+      output.innerText = 'Model Loaded';
+
+      setInterval(async () => {
+        const predictions = await model.estimateHands(video);
+        if (predictions.length > 0) {
+          const result = await GE.estimate(predictions[0].landmarks, 8.5); // Confidence threshold
+
+          if (result.gestures.length > 0) {
+            const best = result.gestures.reduce((p, c) => (p.score > c.score ? p : c));
+            output.innerText = `Detected: ${best.name}`;
+
+            const now = Date.now();
+            if (best.name === lastStableGesture) {
+              if (now - stableStartTime > STABLE_DURATION) {
+                if (!bufferText.endsWith(`${best.name} `)) {
+                  bufferText += best.name + ' ';
+                  bufferEl.innerText = bufferText.trim();
+                }
+                stableStartTime = now + 999999; // Freeze temporarily
+              }
+            } else {
+              lastStableGesture = best.name;
+              stableStartTime = now;
+            }
+          } else {
+            output.innerText = 'No gesture detected';
+          }
+        } else {
+          output.innerText = 'No hand detected';
+        }
+      }, 300);
+    }
+
+    clearBtn.onclick = () => {
+      bufferText = '';
+      bufferEl.innerText = '';
+    };
+
+    main();
+  </script>
+</body>
+</html>
