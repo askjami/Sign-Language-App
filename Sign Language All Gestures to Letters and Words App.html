@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign Language to Text</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #eee;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      font-size: 2em;
+      margin-top: 20px;
+    }
+    #webcam {
+      margin-top: 20px;
+      border: 2px solid #ccc;
+      width: 90vw;
+      max-width: 640px;
+      height: auto;
+      aspect-ratio: 4 / 3;
+    }
+    #output, #buffer {
+      font-size: 1.5em;
+      margin: 15px auto;
+      color: #00ff90;
+      max-width: 90vw;
+      word-wrap: break-word;
+    }
+    #clear {
+      background: #00ff90;
+      border: none;
+      padding: 10px 20px;
+      font-size: 1em;
+      margin-bottom: 20px;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sign Language to Text</h1>
+  <video id="webcam" autoplay playsinline></video>
+  <div id="output">Loading model...</div>
+  <div id="buffer"></div>
+  <button id="clear">Clear</button>
+
+  <!-- TensorFlow & Fingerpose -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
+
+  <!-- Define all gestures -->
+  <script>
+    const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
+
+    // Helper to create basic curl pattern
+    function makeGesture(name, pattern) {
+      const g = new GestureDescription(name);
+      pattern.forEach(([finger, curl]) => g.addCurl(finger, curl, 1.0));
+      return g;
+    }
+
+    function defineAllGestures() {
+      const gestures = [];
+
+      // A-Z letters (simplified approximations)
+      const letters = {};
+      for (let c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+        const g = new GestureDescription(c);
+        Finger.all.forEach(f => g.addCurl(f, FingerCurl.HalfCurl, 1.0));
+        g.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0); // distinguish a bit
+        letters[c] = g;
+        gestures.push(g);
+      }
+
+      // Words
+      function wordGesture(name, curls = {}) {
+        const g = new GestureDescription(name);
+        Finger.all.forEach(f => {
+          g.addCurl(f, curls[f] || FingerCurl.NoCurl, 1.0);
+        });
+        return g;
+      }
+
+      gestures.push(wordGesture("Hello"));
+      gestures.push(wordGesture("Yes", { [Finger.Thumb]: FingerCurl.FullCurl }));
+      gestures.push(wordGesture("No", { [Finger.Index]: FingerCurl.NoCurl, [Finger.Middle]: FingerCurl.NoCurl }));
+      gestures.push(wordGesture("Thanks"));
+      gestures.push(wordGesture("Please"));
+      gestures.push(wordGesture("Stop"));
+      gestures.push(wordGesture("Love", {
+        [Finger.Index]: FingerCurl.NoCurl,
+        [Finger.Pinky]: FingerCurl.NoCurl,
+        [Finger.Thumb]: FingerCurl.NoCurl,
+        [Finger.Middle]: FingerCurl.FullCurl,
+        [Finger.Ring]: FingerCurl.FullCurl
+      }));
+      gestures.push(wordGesture("Help", {
+        [Finger.Thumb]: FingerCurl.NoCurl,
+        [Finger.Index]: FingerCurl.FullCurl,
+        [Finger.Middle]: FingerCurl.FullCurl,
+        [Finger.Ring]: FingerCurl.FullCurl,
+        [Finger.Pinky]: FingerCurl.FullCurl
+      }));
+      gestures.push(wordGesture("Fine"));
+      gestures.push(wordGesture("Good"));
+
+      return gestures;
+    }
+  </script>
+
+  <!-- Main App -->
+  <script>
+    const video = document.getElementById('webcam');
+    const output = document.getElementById('output');
+    const bufferEl = document.getElementById('buffer');
+    const clearBtn = document.getElementById('clear');
+    let bufferText = '';
+    let lastDetected = '';
+    let lastTime = 0;
+
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' }
+      });
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve(video);
+      });
+    }
+
+    async function main() {
+      await setupCamera();
+      await tf.setBackend('webgl');
+      await tf.ready();
+
+      const model = await handpose.load();
+      const gestureList = defineAllGestures();
+      const GE = new fp.GestureEstimator(gestureList);
+      output.innerText = 'Model Loaded';
+
+      setInterval(async () => {
+        const predictions = await model.estimateHands(video);
+        if (predictions.length > 0) {
+          const result = await GE.estimate(predictions[0].landmarks, 8);
+          if (result.gestures.length > 0) {
+            const gesture = result.gestures.reduce((p, c) => (p.score > c.score ? p : c));
+            output.innerText = `Detected: ${gesture.name}`;
+
+            const now = Date.now();
+            if (gesture.name !== lastDetected || now - lastTime > 2000) {
+              bufferText += gesture.name + ' ';
+              bufferEl.innerText = bufferText.trim();
+              lastDetected = gesture.name;
+              lastTime = now;
+            }
+          } else {
+            output.innerText = 'No gesture detected';
+          }
+        } else {
+          output.innerText = 'No hand detected';
+        }
+      }, 300);
+    }
+
+    clearBtn.onclick = () => {
+      bufferText = '';
+      bufferEl.innerText = '';
+    };
+
+    main();
+  </script>
+</body>
+</html>
