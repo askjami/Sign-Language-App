@@ -1,8 +1,9 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sign Language to Text</title>
   <style>
     body {
@@ -13,115 +14,157 @@
       margin: 0;
       padding: 0;
     }
+
     h1 {
       font-size: 1.8em;
-      margin: 20px 0 10px;
+      margin-top: 20px;
     }
-    video {
+
+    #webcam {
+      margin-top: 20px;
+      border: 2px solid #ccc;
       width: 90vw;
       max-width: 640px;
-      border: 2px solid #ccc;
-      border-radius: 10px;
+      height: auto;
+      aspect-ratio: 4 / 3;
     }
+
     #output {
       font-size: 1.5em;
-      margin-top: 20px;
+      margin: 20px auto;
       color: #00ff90;
-      padding: 0 10px;
+      max-width: 90vw;
+      word-wrap: break-word;
     }
-    #buffer {
-      margin-top: 10px;
-      font-size: 1.2em;
-      color: #fff;
-      min-height: 24px;
-    }
-    button {
-      margin: 10px 5px;
-      padding: 10px 20px;
-      font-size: 1em;
-      background: #00ff90;
-      color: #000;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
+
+    @media (min-width: 768px) {
+      h1 {
+        font-size: 2.2em;
+      }
+
+      #output {
+        font-size: 2em;
+      }
     }
   </style>
 </head>
 <body>
   <h1>Sign Language to Text</h1>
   <video id="webcam" autoplay playsinline></video>
-  <div>
-    <button id="switchCam">Switch Camera</button>
-    <button id="clear">Clear</button>
-  </div>
-  <div id="output">Loading models...</div>
-  <div id="buffer"></div>
+  <div id="output">Loading model...</div>
 
-  <!-- TensorFlow and Fingerpose Libraries -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+  <!-- TensorFlow.js and Handpose -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+
+  <!-- Fingerpose -->
   <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
 
+  <!-- Gesture Definitions -->
   <script>
-    const video = document.getElementById("webcam");
-    const output = document.getElementById("output");
-    const buffer = document.getElementById("buffer");
-    const clearBtn = document.getElementById("clear");
-    const switchCamBtn = document.getElementById("switchCam");
+    const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
 
-    let model;
-    let gestureEstimator;
-    let currentStream;
-    let useFrontCamera = true;
-
-    const bufferText = [];
-    let lastGesture = '';
-    let gestureStartTime = 0;
-    const STABLE_TIME = 1000; // ms
-
-    clearBtn.onclick = () => {
-      bufferText.length = 0;
-      buffer.innerText = "";
-    };
-
-    switchCamBtn.onclick = async () => {
-      useFrontCamera = !useFrontCamera;
-      await setupCamera();
-    };
-
-    function createGestures() {
-      const { GestureDescription, Finger, FingerCurl } = window.fp;
+    function defineWordGestures() {
       const gestures = [];
 
-      // Placeholder gesture for demonstration
-      const A = new GestureDescription('A');
-      A.addCurl(Finger.Thumb, FingerCurl.NoCurl, 1.0);
-      A.addCurl(Finger.Index, FingerCurl.FullCurl, 1.0);
-      A.addCurl(Finger.Middle, FingerCurl.FullCurl, 1.0);
-      A.addCurl(Finger.Ring, FingerCurl.FullCurl, 1.0);
-      A.addCurl(Finger.Pinky, FingerCurl.FullCurl, 1.0);
-      gestures.push(A);
+      // HELLO - flat hand (all fingers extended, vertical up)
+      const Hello = new GestureDescription("Hello");
+      for (let finger of Finger.all) {
+        Hello.addCurl(finger, FingerCurl.NoCurl, 1.0);
+        Hello.addDirection(finger, FingerDirection.VerticalUp, 1.0);
+      }
+      gestures.push(Hello);
 
-      // You can define more real gestures here
+      // YES - fist (same as 'A')
+      const Yes = new GestureDescription("Yes");
+      for (let finger of Finger.all) {
+        Yes.addCurl(finger, FingerCurl.FullCurl, 1.0);
+      }
+      gestures.push(Yes);
+
+      // NO - index and middle extended
+      const No = new GestureDescription("No");
+      No.addCurl(Finger.Index, FingerCurl.NoCurl);
+      No.addCurl(Finger.Middle, FingerCurl.NoCurl);
+      for (let finger of [Finger.Ring, Finger.Pinky, Finger.Thumb]) {
+        No.addCurl(finger, FingerCurl.FullCurl);
+      }
+      gestures.push(No);
+
+      // THANKS - flat hand, palm out
+      const Thanks = new GestureDescription("Thanks");
+      for (let finger of Finger.all) {
+        Thanks.addCurl(finger, FingerCurl.NoCurl);
+        Thanks.addDirection(finger, FingerDirection.DiagonalUpLeft, 0.75);
+        Thanks.addDirection(finger, FingerDirection.DiagonalUpRight, 0.75);
+      }
+      gestures.push(Thanks);
+
+      // PLEASE - flat hand, palm on chest (approx.)
+      const Please = new GestureDescription("Please");
+      for (let finger of Finger.all) {
+        Please.addCurl(finger, FingerCurl.NoCurl);
+        Please.addDirection(finger, FingerDirection.VerticalUp);
+      }
+      gestures.push(Please);
+
+      // STOP - palm outward (same as Hello, held outward)
+      const Stop = new GestureDescription("Stop");
+      for (let finger of Finger.all) {
+        Stop.addCurl(finger, FingerCurl.NoCurl);
+        Stop.addDirection(finger, FingerDirection.VerticalUp);
+      }
+      gestures.push(Stop);
+
+      // LOVE - "I love you" sign (index, pinky, and thumb out)
+      const Love = new GestureDescription("Love");
+      Love.addCurl(Finger.Index, FingerCurl.NoCurl);
+      Love.addCurl(Finger.Pinky, FingerCurl.NoCurl);
+      Love.addCurl(Finger.Thumb, FingerCurl.NoCurl);
+      Love.addCurl(Finger.Middle, FingerCurl.FullCurl);
+      Love.addCurl(Finger.Ring, FingerCurl.FullCurl);
+      gestures.push(Love);
+
+      // HELP - thumb up, other fingers curled
+      const Help = new GestureDescription("Help");
+      Help.addCurl(Finger.Thumb, FingerCurl.NoCurl);
+      for (let finger of [Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky]) {
+        Help.addCurl(finger, FingerCurl.FullCurl);
+      }
+      gestures.push(Help);
+
+      // FINE - thumb touching chest, others up (simplified)
+      const Fine = new GestureDescription("Fine");
+      Fine.addCurl(Finger.Thumb, FingerCurl.NoCurl);
+      for (let finger of [Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky]) {
+        Fine.addCurl(finger, FingerCurl.NoCurl);
+        Fine.addDirection(finger, FingerDirection.VerticalUp);
+      }
+      gestures.push(Fine);
+
+      // GOOD - flat hand to mouth (approx.)
+      const Good = new GestureDescription("Good");
+      for (let finger of Finger.all) {
+        Good.addCurl(finger, FingerCurl.NoCurl);
+        Good.addDirection(finger, FingerDirection.DiagonalUpLeft, 0.75);
+        Good.addDirection(finger, FingerDirection.DiagonalUpRight, 0.75);
+      }
+      gestures.push(Good);
+
       return gestures;
     }
+  </script>
+
+  <!-- Main App -->
+  <script>
+    const video = document.getElementById('webcam');
+    const output = document.getElementById('output');
 
     async function setupCamera() {
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
-      }
-
-      const constraints = {
-        video: {
-          facingMode: useFrontCamera ? "user" : "environment"
-        },
-        audio: false
-      };
-
-      currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-      video.srcObject = currentStream;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" }
+      });
+      video.srcObject = stream;
       return new Promise(resolve => {
         video.onloadedmetadata = () => resolve(video);
       });
@@ -129,36 +172,29 @@
 
     async function main() {
       await setupCamera();
-      model = await handpose.load();
-      gestureEstimator = new fp.GestureEstimator(createGestures());
-      output.innerText = "Models loaded. Show a gesture.";
+      await tf.setBackend('webgl');
+      await tf.ready();
+
+      const model = await handpose.load();
+      output.innerText = 'Model Ready';
+
+      const gestures = defineWordGestures();
+      const gestureEstimator = new fp.GestureEstimator(gestures);
 
       setInterval(async () => {
         const predictions = await model.estimateHands(video);
-
         if (predictions.length > 0) {
-          const gesture = await gestureEstimator.estimate(predictions[0].landmarks, 8.5);
-          if (gesture.gestures.length > 0) {
-            const best = gesture.gestures.reduce((p, c) => (p.score > c.score ? p : c));
-            if (best.name === lastGesture) {
-              if (Date.now() - gestureStartTime > STABLE_TIME) {
-                output.innerText = `Detected: ${best.name}`;
-                if (bufferText[bufferText.length - 1] !== best.name) {
-                  bufferText.push(best.name);
-                  buffer.innerText = bufferText.join(" ");
-                }
-              }
-            } else {
-              lastGesture = best.name;
-              gestureStartTime = Date.now();
-            }
+          const estimated = await gestureEstimator.estimate(predictions[0].landmarks, 7.5);
+          if (estimated.gestures.length > 0) {
+            const best = estimated.gestures.reduce((p, c) => (p.score > c.score ? p : c));
+            output.innerText = `Detected: ${best.name}`;
+          } else {
+            output.innerText = 'No gesture detected';
           }
         } else {
-          output.innerText = "No hand detected";
-          lastGesture = '';
-          gestureStartTime = 0;
+          output.innerText = 'No hand detected';
         }
-      }, 700);
+      }, 150);
     }
 
     main();
