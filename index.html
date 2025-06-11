@@ -57,7 +57,7 @@
   <div id="output">Loading models...</div>
   <div id="buffer"></div>
 
-  <!-- TensorFlow and Gesture Libraries -->
+  <!-- TensorFlow and Fingerpose Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -95,24 +95,16 @@
       const { GestureDescription, Finger, FingerCurl } = window.fp;
       const gestures = [];
 
-      // Add letters A-Z (simple example, not actual signs)
-      for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-        const g = new GestureDescription(letter);
-        g.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0);
-        g.addCurl(Finger.Middle, FingerCurl.FullCurl, 1.0);
-        g.addCurl(Finger.Ring, FingerCurl.FullCurl, 1.0);
-        g.addCurl(Finger.Pinky, FingerCurl.FullCurl, 1.0);
-        gestures.push(g);
-      }
+      // Placeholder gesture for demonstration
+      const A = new GestureDescription('A');
+      A.addCurl(Finger.Thumb, FingerCurl.NoCurl, 1.0);
+      A.addCurl(Finger.Index, FingerCurl.FullCurl, 1.0);
+      A.addCurl(Finger.Middle, FingerCurl.FullCurl, 1.0);
+      A.addCurl(Finger.Ring, FingerCurl.FullCurl, 1.0);
+      A.addCurl(Finger.Pinky, FingerCurl.FullCurl, 1.0);
+      gestures.push(A);
 
-      // Predefined common word gestures (simplified for demo)
-      const words = ["Hello", "Yes", "No", "Help", "Love", "Thanks", "Please", "Good", "Stop", "Fine"];
-      for (let word of words) {
-        const g = new GestureDescription(word);
-        Finger.all.forEach(f => g.addCurl(f, FingerCurl.NoCurl, 1.0));
-        gestures.push(g);
-      }
-
+      // You can define more real gestures here
       return gestures;
     }
 
@@ -139,7 +131,7 @@
       await setupCamera();
       model = await handpose.load();
       gestureEstimator = new fp.GestureEstimator(createGestures());
-      output.innerText = "Models loaded";
+      output.innerText = "Models loaded. Show a gesture.";
 
       setInterval(async () => {
         const predictions = await model.estimateHands(video);
