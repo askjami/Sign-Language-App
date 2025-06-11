@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Sign Language & Face Expression to Text</title>
+  <title>Sign Language to Text</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -23,7 +23,7 @@
       border: 2px solid #ccc;
       border-radius: 10px;
     }
-    #output, #expressionOutput {
+    #output {
       font-size: 1.5em;
       margin-top: 20px;
       color: #00ff90;
@@ -35,7 +35,7 @@
       color: #fff;
       min-height: 24px;
     }
-    #clear, #switchCam {
+    button {
       margin: 10px 5px;
       padding: 10px 20px;
       font-size: 1em;
@@ -48,33 +48,30 @@
   </style>
 </head>
 <body>
-  <h1>Sign Language + Facial Expression to Text</h1>
+  <h1>Sign Language to Text</h1>
   <video id="webcam" autoplay playsinline></video>
   <div>
     <button id="switchCam">Switch Camera</button>
     <button id="clear">Clear</button>
   </div>
   <div id="output">Loading models...</div>
-  <div id="expressionOutput">Expression: Detecting...</div>
   <div id="buffer"></div>
 
-  <!-- TensorFlow and Models -->
+  <!-- TensorFlow and Gesture Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
   <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
 
   <script>
     const video = document.getElementById("webcam");
     const output = document.getElementById("output");
-    const expressionOutput = document.getElementById("expressionOutput");
     const buffer = document.getElementById("buffer");
     const clearBtn = document.getElementById("clear");
     const switchCamBtn = document.getElementById("switchCam");
 
-    let model, faceModel;
+    let model;
     let gestureEstimator;
     let currentStream;
     let useFrontCamera = true;
@@ -98,6 +95,7 @@
       const { GestureDescription, Finger, FingerCurl } = window.fp;
       const gestures = [];
 
+      // Add letters A-Z (simple example, not actual signs)
       for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
         const g = new GestureDescription(letter);
         g.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0);
@@ -107,6 +105,7 @@
         gestures.push(g);
       }
 
+      // Predefined common word gestures (simplified for demo)
       const words = ["Hello", "Yes", "No", "Help", "Love", "Thanks", "Please", "Good", "Stop", "Fine"];
       for (let word of words) {
         const g = new GestureDescription(word);
@@ -136,30 +135,17 @@
       });
     }
 
-    function detectFaceExpression(predictions) {
-      if (!predictions.length) return "No face";
-      const r = Math.random();
-      if (r < 0.1) return "Winking";
-      if (r < 0.2) return "Blinking";
-      if (r < 0.4) return "Smiling";
-      if (r < 0.6) return "Frowning";
-      if (r < 0.8) return "Laughing";
-      return "Neutral";
-    }
-
     async function main() {
       await setupCamera();
       model = await handpose.load();
-      faceModel = await blazeface.load();
       gestureEstimator = new fp.GestureEstimator(createGestures());
       output.innerText = "Models loaded";
 
       setInterval(async () => {
-        const handPredictions = await model.estimateHands(video);
-        const facePredictions = await faceModel.estimateFaces(video, false);
+        const predictions = await model.estimateHands(video);
 
-        if (handPredictions.length > 0) {
-          const gesture = await gestureEstimator.estimate(handPredictions[0].landmarks, 8.5);
+        if (predictions.length > 0) {
+          const gesture = await gestureEstimator.estimate(predictions[0].landmarks, 8.5);
           if (gesture.gestures.length > 0) {
             const best = gesture.gestures.reduce((p, c) => (p.score > c.score ? p : c));
             if (best.name === lastGesture) {
@@ -180,9 +166,6 @@
           lastGesture = '';
           gestureStartTime = 0;
         }
-
-        const expression = detectFaceExpression(facePredictions);
-        expressionOutput.innerText = `Expression: ${expression}`;
       }, 700);
     }
 
