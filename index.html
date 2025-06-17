@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Fast Sign Language & Expression Detection (Mobile Back Camera)</title>
+  <title>Sign Language to Text (Back Camera)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
-      background-color: #111;
+      background: #111;
       color: #eee;
       font-family: Arial, sans-serif;
       text-align: center;
@@ -24,19 +24,19 @@
       border: 2px solid #00ff90;
       object-fit: cover;
     }
-    #output, #expression {
-      margin-top: 10px;
-      font-size: 1.4em;
+    #output {
+      margin-top: 20px;
+      font-size: 1.5em;
       color: #00ff90;
     }
     #buffer {
+      margin-top: 10px;
       font-size: 1.2em;
       color: #fff;
-      margin-top: 10px;
       min-height: 24px;
     }
     button {
-      margin-top: 10px;
+      margin-top: 15px;
       padding: 10px 20px;
       font-size: 1em;
       background: #00ff90;
@@ -48,157 +48,144 @@
   </style>
 </head>
 <body>
-  <h1>Sign Language & Expression Detection</h1>
+  <h1>Sign Language to Text</h1>
   <video id="webcam" autoplay playsinline muted></video>
   <div id="output">Loading models...</div>
-  <div id="expression">Expression: --</div>
   <div id="buffer"></div>
-  <button id="clear">Clear Buffer</button>
+  <button id="clear">Clear Text</button>
 
-  <!-- TensorFlow & Models -->
+  <!-- TensorFlow & Fingerpose -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
   <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
 
   <script>
     const video = document.getElementById("webcam");
     const output = document.getElementById("output");
-    const expressionEl = document.getElementById("expression");
     const bufferEl = document.getElementById("buffer");
     const clearBtn = document.getElementById("clear");
 
     const bufferText = [];
+    const STABLE_TIME = 600;
     const gestureState = { value: "", time: 0 };
-    const STABLE_TIME = 600; // faster than before
 
-    let handModel, faceModel, gestureEstimator;
+    let handModel, gestureEstimator;
+
+    // Map gestures to full text sentences
+    const gestureMap = {
+      "Hello": "Hello",
+      "Help": "I need help",
+      "Fine": "I am fine",
+      "Thanks": "Thank you",
+      "Please": "Please",
+      "Yes": "Yes",
+      "No": "No",
+      "Stop": "Please stop",
+      "OK": "Okay",
+      "Love": "I love you"
+    };
 
     clearBtn.onclick = () => {
       bufferText.length = 0;
       bufferEl.innerText = "";
     };
 
-    function mockExpression() {
-      const expressions = ["Neutral", "Smiling", "Frowning", "Surprised", "Winking"];
-      return expressions[Math.floor(Math.random() * expressions.length)];
-    }
-
     function defineGestures() {
       const { GestureDescription, Finger, FingerCurl } = window.fp;
       const gestures = [];
 
-      const make = (name, setup) => {
+      const addGesture = (name, setup) => {
         const g = new GestureDescription(name);
         setup(g, Finger, FingerCurl);
         gestures.push(g);
       };
 
-      make("Fist", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.FullCurl, 1)));
-      make("Palm", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
-      make("Thumbs Up", (g, F, C) => {
+      addGesture("Hello", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
+      addGesture("Help", (g, F, C) => {
+        g.addCurl(F.Thumb, C.NoCurl, 1);
+        g.addCurl(F.Index, C.NoCurl, 1);
+        g.addCurl(F.Middle, C.FullCurl, 1);
+        g.addCurl(F.Ring, C.FullCurl, 1);
+        g.addCurl(F.Pinky, C.FullCurl, 1);
+      });
+      addGesture("Fine", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
+      addGesture("Thanks", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
+      addGesture("Please", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
+      addGesture("Yes", (g, F, C) => {
         g.addCurl(F.Thumb, C.NoCurl, 1);
         [F.Index, F.Middle, F.Ring, F.Pinky].forEach(f => g.addCurl(f, C.FullCurl, 1));
       });
-      make("Thumbs Down", (g, F, C) => {
-        g.addCurl(F.Thumb, C.NoCurl, 1);
-        [F.Index, F.Middle, F.Ring, F.Pinky].forEach(f => g.addCurl(f, C.FullCurl, 1));
-      });
-      make("Peace", (g, F, C) => {
+      addGesture("No", (g, F, C) => {
+        g.addCurl(F.Thumb, C.FullCurl, 1);
         g.addCurl(F.Index, C.NoCurl, 1);
         g.addCurl(F.Middle, C.NoCurl, 1);
-        [F.Ring, F.Pinky].forEach(f => g.addCurl(f, C.FullCurl, 1));
-        g.addCurl(F.Thumb, C.HalfCurl, 1);
+        g.addCurl(F.Ring, C.FullCurl, 1);
+        g.addCurl(F.Pinky, C.FullCurl, 1);
       });
-      make("OK", (g, F, C) => {
+      addGesture("Stop", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
+      addGesture("OK", (g, F, C) => {
         g.addCurl(F.Thumb, C.HalfCurl, 1);
         g.addCurl(F.Index, C.HalfCurl, 1);
         [F.Middle, F.Ring, F.Pinky].forEach(f => g.addCurl(f, C.NoCurl, 1));
       });
-      make("Rock", (g, F, C) => {
+      addGesture("Love", (g, F, C) => {
         g.addCurl(F.Index, C.NoCurl, 1);
         g.addCurl(F.Pinky, C.NoCurl, 1);
         [F.Middle, F.Ring].forEach(f => g.addCurl(f, C.FullCurl, 1));
         g.addCurl(F.Thumb, C.HalfCurl, 1);
       });
-      make("Call Me", (g, F, C) => {
-        g.addCurl(F.Thumb, C.NoCurl, 1);
-        g.addCurl(F.Pinky, C.NoCurl, 1);
-        [F.Index, F.Middle, F.Ring].forEach(f => g.addCurl(f, C.FullCurl, 1));
-      });
-      make("Point", (g, F, C) => {
-        g.addCurl(F.Index, C.NoCurl, 1);
-        [F.Middle, F.Ring, F.Pinky].forEach(f => g.addCurl(f, C.FullCurl, 1));
-        g.addCurl(F.Thumb, C.HalfCurl, 1);
-      });
-      make("Stop", (g, F, C) => F.all.forEach(f => g.addCurl(f, C.NoCurl, 1)));
 
       return gestures;
     }
 
     async function setupCamera() {
       const constraints = {
-        audio: false,
         video: {
-          facingMode: { exact: "environment" } // Forces back camera
+          facingMode: { exact: "environment" } // Back camera only
         }
       };
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
-        return new Promise(resolve => {
-          video.onloadedmetadata = () => resolve(video);
-        });
-      } catch (err) {
-        alert("Back camera not available or permission denied.");
-        throw err;
-      }
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve(video);
+      });
     }
 
-    async function detect() {
+    async function detectGesture() {
       const hands = await handModel.estimateHands(video);
-      const faces = await faceModel.estimateFaces(video, false);
-
-      // --- Gesture Detection ---
       if (hands.length > 0) {
         const estimation = await gestureEstimator.estimate(hands[0].landmarks, 9);
         if (estimation.gestures.length > 0) {
-          const best = estimation.gestures.reduce((a, b) => a.score > b.score ? a : b);
-          if (best.name === gestureState.value) {
+          const best = estimation.gestures.reduce((a, b) => (a.score > b.score ? a : b));
+          const name = best.name;
+
+          if (name === gestureState.value) {
             if (Date.now() - gestureState.time > STABLE_TIME) {
-              output.innerText = `Gesture: ${best.name}`;
-              if (bufferText[bufferText.length - 1] !== best.name) {
-                bufferText.push(best.name);
+              const sentence = gestureMap[name];
+              output.innerText = `Gesture: ${name}`;
+              if (bufferText[bufferText.length - 1] !== sentence) {
+                bufferText.push(sentence);
                 bufferEl.innerText = bufferText.join(" ");
               }
             }
           } else {
-            gestureState.value = best.name;
+            gestureState.value = name;
             gestureState.time = Date.now();
           }
         }
       }
-
-      // --- Face Expression (mock) ---
-      expressionEl.innerText = `Expression: ${mockExpression()}`;
     }
 
     async function main() {
       await tf.setBackend("webgl");
       await setupCamera();
-
-      [handModel, faceModel] = await Promise.all([
-        handpose.load(),
-        blazeface.load()
-      ]);
-
+      handModel = await handpose.load();
       gestureEstimator = new fp.GestureEstimator(defineGestures());
       output.innerText = "Ready";
 
-      setInterval(detect, 250); // Fast detection loop
+      setInterval(detectGesture, 250); // Fast detection loop
     }
 
     main();
