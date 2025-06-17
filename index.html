@@ -2,159 +2,164 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Sign Language & Facial Expression - Dual Camera</title>
+  <title>Dual Camera Gesture & Expression Detection</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #111;
-      color: #eee;
-      text-align: center;
-      margin: 0;
-      padding: 0;
-    }
-    h1 {
-      font-size: 1.8em;
-      margin: 20px 0 10px;
-    }
-    video {
-      width: 45vw;
-      max-width: 480px;
-      margin: 10px;
-      border: 2px solid #ccc;
-      border-radius: 10px;
-    }
-    #output, #expressionOutput {
-      font-size: 1.5em;
-      margin-top: 20px;
-      color: #00ff90;
-    }
-    #buffer {
-      margin-top: 10px;
-      font-size: 1.2em;
-      color: #fff;
-      min-height: 24px;
-    }
-    #clear {
-      margin-top: 10px;
-      padding: 10px 20px;
-      font-size: 1em;
-      background: #00ff90;
-      color: #000;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-    }
+    body { background: #111; color: #eee; font-family: sans-serif; text-align: center; }
+    video { width: 45%; margin: 10px; border: 2px solid #ccc; border-radius: 10px; }
+    #outputs { display: flex; justify-content: space-around; }
+    .panel { width: 45%; }
+    .panel h2 { font-size: 1.2em; color: #00ff90; }
+    .buffer { margin-top: 10px; font-size: 1em; color: #fff; min-height: 20px; }
+    #clear { margin: 15px; padding: 10px 20px; background: #00ff90; color: #000; border: none; border-radius: 6px; }
   </style>
 </head>
 <body>
-  <h1>Sign Language + Facial Expression Detection (Dual Camera)</h1>
-  <video id="webcam1" autoplay playsinline></video>
-  <video id="webcam2" autoplay playsinline></video>
-  <div id="output">Loading models...</div>
-  <div id="expressionOutput">Expression: Detecting...</div>
-  <div id="buffer"></div>
+  <h1>Dual Camera: Gesture & Expression Detection</h1>
+  <div>
+    <video id="webcam1" autoplay playsinline></video>
+    <video id="webcam2" autoplay playsinline></video>
+  </div>
+  <div id="outputs">
+    <div class="panel">
+      <h2 id="output1">Loading...</h2>
+      <div id="expression1">Expression: --</div>
+      <div class="buffer" id="buffer1"></div>
+    </div>
+    <div class="panel">
+      <h2 id="output2">Loading...</h2>
+      <div id="expression2">Expression: --</div>
+      <div class="buffer" id="buffer2"></div>
+    </div>
+  </div>
   <button id="clear">Clear</button>
 
-  <!-- TensorFlow & Models -->
+  <!-- TF & Models -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
-  <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
 
   <script>
     const video1 = document.getElementById("webcam1");
     const video2 = document.getElementById("webcam2");
-    const output = document.getElementById("output");
-    const expressionOutput = document.getElementById("expressionOutput");
-    const buffer = document.getElementById("buffer");
+
+    const output1 = document.getElementById("output1");
+    const output2 = document.getElementById("output2");
+    const expression1 = document.getElementById("expression1");
+    const expression2 = document.getElementById("expression2");
+    const buffer1 = document.getElementById("buffer1");
+    const buffer2 = document.getElementById("buffer2");
     const clearBtn = document.getElementById("clear");
 
-    let model, faceModel;
-    let gestureEstimator;
-    const bufferText = [];
     const STABLE_TIME = 1000;
+    const buffers = { 1: [], 2: [] };
 
     clearBtn.onclick = () => {
-      bufferText.length = 0;
-      buffer.innerText = "";
+      buffers[1] = [];
+      buffers[2] = [];
+      buffer1.innerText = "";
+      buffer2.innerText = "";
     };
 
-    function createGestures() {
+    let handModel, faceModel, gestureEstimator;
+
+    function defineGestures() {
       const { GestureDescription, Finger, FingerCurl } = window.fp;
-      const gestures = [];
 
-      for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-        const g = new GestureDescription(letter);
-        g.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0);
-        g.addCurl(Finger.Middle, FingerCurl.FullCurl, 1.0);
-        g.addCurl(Finger.Ring, FingerCurl.FullCurl, 1.0);
-        g.addCurl(Finger.Pinky, FingerCurl.FullCurl, 1.0);
-        gestures.push(g);
-      }
+      const makeGesture = (name, curls) => {
+        const g = new GestureDescription(name);
+        curls.forEach(([finger, curl]) => g.addCurl(finger, curl, 1.0));
+        return g;
+      };
 
-      const words = ["Hello", "Yes", "No", "Help", "Love", "Thanks", "Please", "Good", "Stop", "Fine"];
-      for (let word of words) {
-        const g = new GestureDescription(word);
-        Finger.all.forEach(f => g.addCurl(f, FingerCurl.NoCurl, 1.0));
-        gestures.push(g);
-      }
-
-      return gestures;
+      return [
+        makeGesture("Fist", Finger.all.map(f => [f, FingerCurl.FullCurl])),
+        makeGesture("Palm", Finger.all.map(f => [f, FingerCurl.NoCurl])),
+        makeGesture("Thumbs Up", [
+          [Finger.Thumb, FingerCurl.NoCurl],
+          ...[Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky].map(f => [f, FingerCurl.FullCurl])
+        ]),
+        makeGesture("Thumbs Down", [
+          [Finger.Thumb, FingerCurl.NoCurl],
+          ...[Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky].map(f => [f, FingerCurl.FullCurl])
+        ]),
+        makeGesture("Peace", [
+          [Finger.Index, FingerCurl.NoCurl],
+          [Finger.Middle, FingerCurl.NoCurl],
+          [Finger.Ring, FingerCurl.FullCurl],
+          [Finger.Pinky, FingerCurl.FullCurl],
+          [Finger.Thumb, FingerCurl.HalfCurl]
+        ]),
+        makeGesture("OK", [
+          [Finger.Thumb, FingerCurl.HalfCurl],
+          [Finger.Index, FingerCurl.HalfCurl],
+          [Finger.Middle, FingerCurl.NoCurl],
+          [Finger.Ring, FingerCurl.NoCurl],
+          [Finger.Pinky, FingerCurl.NoCurl]
+        ]),
+        makeGesture("Rock", [
+          [Finger.Index, FingerCurl.NoCurl],
+          [Finger.Pinky, FingerCurl.NoCurl],
+          [Finger.Middle, FingerCurl.FullCurl],
+          [Finger.Ring, FingerCurl.FullCurl],
+          [Finger.Thumb, FingerCurl.HalfCurl]
+        ]),
+        makeGesture("Call Me", [
+          [Finger.Thumb, FingerCurl.NoCurl],
+          [Finger.Pinky, FingerCurl.NoCurl],
+          ...[Finger.Index, Finger.Middle, Finger.Ring].map(f => [f, FingerCurl.FullCurl])
+        ]),
+        makeGesture("Point", [
+          [Finger.Index, FingerCurl.NoCurl],
+          ...[Finger.Middle, Finger.Ring, Finger.Pinky].map(f => [f, FingerCurl.FullCurl]),
+          [Finger.Thumb, FingerCurl.HalfCurl]
+        ]),
+        makeGesture("Stop", Finger.all.map(f => [f, FingerCurl.NoCurl]))
+      ];
     }
 
     async function getVideoDevices() {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter(device => device.kind === "videoinput");
+      return devices.filter(d => d.kind === "videoinput");
     }
 
     async function setupCameras() {
       const devices = await getVideoDevices();
-      if (devices.length < 2) {
-        alert("Two cameras required");
-        throw new Error("Two cameras not available");
-      }
+      if (devices.length < 2) throw new Error("Need at least 2 cameras.");
 
       const stream1 = await navigator.mediaDevices.getUserMedia({ video: { deviceId: devices[0].deviceId } });
       video1.srcObject = stream1;
-
       const stream2 = await navigator.mediaDevices.getUserMedia({ video: { deviceId: devices[1].deviceId } });
       video2.srcObject = stream2;
 
       return Promise.all([
         new Promise(resolve => video1.onloadedmetadata = resolve),
-        new Promise(resolve => video2.onloadedmetadata = resolve),
+        new Promise(resolve => video2.onloadedmetadata = resolve)
       ]);
     }
 
-    function detectFaceExpression(predictions) {
+    function detectExpression(predictions) {
       if (!predictions.length) return "No face";
       const r = Math.random();
-      if (r < 0.1) return "Winking";
-      if (r < 0.2) return "Blinking";
-      if (r < 0.4) return "Smiling";
-      if (r < 0.6) return "Frowning";
-      if (r < 0.8) return "Laughing";
-      return "Neutral";
+      return ["Neutral", "Smiling", "Frowning", "Surprised", "Winking", "Blinking"][Math.floor(r * 6)];
     }
 
-    async function runDetection(video, gestureRef, timeRef) {
-      const handPredictions = await model.estimateHands(video);
-      const facePredictions = await faceModel.estimateFaces(video, false);
+    async function detect(video, outEl, exprEl, bufEl, id, gestureRef, timeRef) {
+      const hands = await handModel.estimateHands(video);
+      const faces = await faceModel.estimateFaces(video, false);
 
-      // --- HAND ---
-      if (handPredictions.length > 0) {
-        const gesture = await gestureEstimator.estimate(handPredictions[0].landmarks, 8.5);
-        if (gesture.gestures.length > 0) {
-          const best = gesture.gestures.reduce((p, c) => (p.score > c.score ? p : c));
+      if (hands.length > 0) {
+        const g = await gestureEstimator.estimate(hands[0].landmarks, 8.5);
+        if (g.gestures.length) {
+          const best = g.gestures.reduce((p, c) => (p.score > c.score ? p : c));
           if (best.name === gestureRef.value) {
             if (Date.now() - timeRef.value > STABLE_TIME) {
-              output.innerText = `Detected: ${best.name}`;
-              if (bufferText[bufferText.length - 1] !== best.name) {
-                bufferText.push(best.name);
-                buffer.innerText = bufferText.join(" ");
+              outEl.innerText = `Gesture: ${best.name}`;
+              if (buffers[id][buffers[id].length - 1] !== best.name) {
+                buffers[id].push(best.name);
+                bufEl.innerText = buffers[id].join(" ");
               }
             }
           } else {
@@ -164,26 +169,24 @@
         }
       }
 
-      // --- FACE ---
-      const expression = detectFaceExpression(facePredictions);
-      expressionOutput.innerText = `Expression: ${expression}`;
+      exprEl.innerText = `Expression: ${detectExpression(faces)}`;
     }
 
     async function main() {
       await setupCameras();
-      model = await handpose.load();
+      handModel = await handpose.load();
       faceModel = await blazeface.load();
-      gestureEstimator = new fp.GestureEstimator(createGestures());
-      output.innerText = "Models loaded";
+      gestureEstimator = new fp.GestureEstimator(defineGestures());
 
-      const gestureRef1 = { value: '' };
-      const gestureRef2 = { value: '' };
-      const timeRef1 = { value: 0 };
-      const timeRef2 = { value: 0 };
+      output1.innerText = "Ready";
+      output2.innerText = "Ready";
+
+      const ref1 = { value: "", time: 0 };
+      const ref2 = { value: "", time: 0 };
 
       setInterval(() => {
-        runDetection(video1, gestureRef1, timeRef1);
-        runDetection(video2, gestureRef2, timeRef2);
+        detect(video1, output1, expression1, buffer1, 1, ref1, ref1);
+        detect(video2, output2, expression2, buffer2, 2, ref2, ref2);
       }, 700);
     }
 
