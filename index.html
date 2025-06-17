@@ -2,25 +2,41 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Gesture & Expression Detection - Toggle Camera</title>
+  <title>Fast Sign Language & Expression Detection (Mobile Back Camera)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
-      font-family: Arial, sans-serif;
-      background: #111;
+      background-color: #111;
       color: #eee;
+      font-family: Arial, sans-serif;
       text-align: center;
       margin: 0;
-      padding: 20px;
+      padding: 10px;
+    }
+    h1 {
+      font-size: 1.5em;
+      margin-bottom: 10px;
     }
     video {
-      width: 90%;
-      max-width: 480px;
-      border: 2px solid #ccc;
+      width: 100%;
+      max-height: 60vh;
       border-radius: 10px;
+      border: 2px solid #00ff90;
+      object-fit: cover;
+    }
+    #output, #expression {
       margin-top: 10px;
+      font-size: 1.4em;
+      color: #00ff90;
+    }
+    #buffer {
+      font-size: 1.2em;
+      color: #fff;
+      margin-top: 10px;
+      min-height: 24px;
     }
     button {
-      margin: 15px 10px;
+      margin-top: 10px;
       padding: 10px 20px;
       font-size: 1em;
       background: #00ff90;
@@ -29,31 +45,17 @@
       border-radius: 6px;
       cursor: pointer;
     }
-    #output, #expression {
-      font-size: 1.4em;
-      margin-top: 20px;
-      color: #00ff90;
-    }
-    #buffer {
-      margin-top: 10px;
-      font-size: 1.2em;
-      color: #fff;
-      min-height: 24px;
-    }
   </style>
 </head>
 <body>
-  <h1>Gesture & Expression Detection</h1>
+  <h1>Sign Language & Expression Detection</h1>
   <video id="webcam" autoplay playsinline muted></video>
-  <div id="output">Loading...</div>
+  <div id="output">Loading models...</div>
   <div id="expression">Expression: --</div>
   <div id="buffer"></div>
-  <div>
-    <button id="toggleCamera">Switch Camera</button>
-    <button id="clear">Clear Buffer</button>
-  </div>
+  <button id="clear">Clear Buffer</button>
 
-  <!-- TensorFlow.js and models -->
+  <!-- TensorFlow & Models -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
@@ -66,45 +68,22 @@
     const output = document.getElementById("output");
     const expressionEl = document.getElementById("expression");
     const bufferEl = document.getElementById("buffer");
-    const toggleBtn = document.getElementById("toggleCamera");
     const clearBtn = document.getElementById("clear");
 
-    let model, faceModel, gestureEstimator;
-    let currentStream = null;
-    let videoDevices = [];
-    let currentCameraIndex = 0;
-
     const bufferText = [];
-    const STABLE_TIME = 1000;
-    const gestureState = { value: '', time: 0 };
+    const gestureState = { value: "", time: 0 };
+    const STABLE_TIME = 600; // faster than before
+
+    let handModel, faceModel, gestureEstimator;
 
     clearBtn.onclick = () => {
       bufferText.length = 0;
-      bufferEl.innerText = '';
+      bufferEl.innerText = "";
     };
 
-    toggleBtn.onclick = async () => {
-      currentCameraIndex = (currentCameraIndex + 1) % videoDevices.length;
-      await startCamera(videoDevices[currentCameraIndex].deviceId);
-    };
-
-    async function listCameras() {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      videoDevices = devices.filter(d => d.kind === 'videoinput');
-      if (videoDevices.length < 1) throw new Error("No video input devices found.");
-    }
-
-    async function startCamera(deviceId) {
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
-      }
-
-      currentStream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: deviceId } }
-      });
-
-      video.srcObject = currentStream;
-      return new Promise(resolve => video.onloadedmetadata = resolve);
+    function mockExpression() {
+      const expressions = ["Neutral", "Smiling", "Frowning", "Surprised", "Winking"];
+      return expressions[Math.floor(Math.random() * expressions.length)];
     }
 
     function defineGestures() {
@@ -159,21 +138,35 @@
       return gestures;
     }
 
-    function mockExpression() {
-      const expressions = ["Neutral", "Smiling", "Frowning", "Surprised", "Winking"];
-      return expressions[Math.floor(Math.random() * expressions.length)];
+    async function setupCamera() {
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { exact: "environment" } // Forces back camera
+        }
+      };
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        return new Promise(resolve => {
+          video.onloadedmetadata = () => resolve(video);
+        });
+      } catch (err) {
+        alert("Back camera not available or permission denied.");
+        throw err;
+      }
     }
 
     async function detect() {
-      if (!model || !faceModel) return;
-
-      const hands = await model.estimateHands(video);
+      const hands = await handModel.estimateHands(video);
       const faces = await faceModel.estimateFaces(video, false);
 
+      // --- Gesture Detection ---
       if (hands.length > 0) {
-        const est = await gestureEstimator.estimate(hands[0].landmarks, 8.5);
-        if (est.gestures.length > 0) {
-          const best = est.gestures.reduce((p, c) => (p.score > c.score ? p : c));
+        const estimation = await gestureEstimator.estimate(hands[0].landmarks, 9);
+        if (estimation.gestures.length > 0) {
+          const best = estimation.gestures.reduce((a, b) => a.score > b.score ? a : b);
           if (best.name === gestureState.value) {
             if (Date.now() - gestureState.time > STABLE_TIME) {
               output.innerText = `Gesture: ${best.name}`;
@@ -189,20 +182,23 @@
         }
       }
 
+      // --- Face Expression (mock) ---
       expressionEl.innerText = `Expression: ${mockExpression()}`;
     }
 
     async function main() {
-      await listCameras();
-      await startCamera(videoDevices[currentCameraIndex].deviceId);
+      await tf.setBackend("webgl");
+      await setupCamera();
 
-      model = await handpose.load();
-      faceModel = await blazeface.load();
+      [handModel, faceModel] = await Promise.all([
+        handpose.load(),
+        blazeface.load()
+      ]);
+
       gestureEstimator = new fp.GestureEstimator(defineGestures());
-
       output.innerText = "Ready";
 
-      setInterval(detect, 700);
+      setInterval(detect, 250); // Fast detection loop
     }
 
     main();
