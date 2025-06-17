@@ -2,45 +2,46 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Sign Language to Text (Back Camera)</title>
+  <title>Sign Language to Text (Fast, Mobile)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
       background: #111;
       color: #eee;
       font-family: Arial, sans-serif;
-      text-align: center;
       margin: 0;
-      padding: 10px;
+      padding: 0;
+      text-align: center;
     }
     h1 {
-      font-size: 1.5em;
-      margin-bottom: 10px;
+      margin: 20px 10px 10px;
+      font-size: 1.6em;
+      color: #00ff90;
     }
     video {
       width: 100%;
       max-height: 60vh;
-      border-radius: 10px;
-      border: 2px solid #00ff90;
       object-fit: cover;
+      border: 2px solid #00ff90;
+      border-radius: 8px;
     }
     #output {
-      margin-top: 20px;
-      font-size: 1.5em;
+      font-size: 1.4em;
+      margin: 15px 0;
       color: #00ff90;
     }
     #buffer {
-      margin-top: 10px;
       font-size: 1.2em;
-      color: #fff;
+      padding: 10px;
+      color: white;
       min-height: 24px;
     }
     button {
-      margin-top: 15px;
+      margin: 10px 0 20px;
       padding: 10px 20px;
       font-size: 1em;
       background: #00ff90;
-      color: #000;
+      color: black;
       border: none;
       border-radius: 6px;
       cursor: pointer;
@@ -67,13 +68,12 @@
     const bufferEl = document.getElementById("buffer");
     const clearBtn = document.getElementById("clear");
 
+    let model, gestureEstimator;
     const bufferText = [];
-    const STABLE_TIME = 600;
     const gestureState = { value: "", time: 0 };
+    const STABLE_TIME = 500; // milliseconds
 
-    let handModel, gestureEstimator;
-
-    // Map gestures to full text sentences
+    // Gesture-to-sentence map
     const gestureMap = {
       "Hello": "Hello",
       "Help": "I need help",
@@ -142,23 +142,21 @@
 
     async function setupCamera() {
       const constraints = {
-        video: {
-          facingMode: { exact: "environment" } // Back camera only
-        }
+        video: { facingMode: { exact: "environment" } } // back camera only
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
       return new Promise(resolve => {
-        video.onloadedmetadata = () => resolve(video);
+        video.onloadedmetadata = () => resolve();
       });
     }
 
     async function detectGesture() {
-      const hands = await handModel.estimateHands(video);
+      const hands = await model.estimateHands(video);
       if (hands.length > 0) {
-        const estimation = await gestureEstimator.estimate(hands[0].landmarks, 9);
-        if (estimation.gestures.length > 0) {
-          const best = estimation.gestures.reduce((a, b) => (a.score > b.score ? a : b));
+        const prediction = await gestureEstimator.estimate(hands[0].landmarks, 9);
+        if (prediction.gestures.length > 0) {
+          const best = prediction.gestures.reduce((a, b) => (a.score > b.score ? a : b));
           const name = best.name;
 
           if (name === gestureState.value) {
@@ -181,11 +179,11 @@
     async function main() {
       await tf.setBackend("webgl");
       await setupCamera();
-      handModel = await handpose.load();
+      model = await handpose.load();
       gestureEstimator = new fp.GestureEstimator(defineGestures());
-      output.innerText = "Ready";
+      output.innerText = "Ready to detect gestures";
 
-      setInterval(detectGesture, 250); // Fast detection loop
+      setInterval(detectGesture, 200); // fast updates
     }
 
     main();
