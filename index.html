@@ -2,20 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Sign Language to Text (Fast, Mobile)</title>
+  <title>Fast Sign Language to Text</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
       background: #111;
       color: #eee;
       font-family: Arial, sans-serif;
+      text-align: center;
       margin: 0;
       padding: 0;
-      text-align: center;
     }
     h1 {
-      margin: 20px 10px 10px;
-      font-size: 1.6em;
+      margin: 20px 0 10px;
       color: #00ff90;
     }
     video {
@@ -71,9 +70,9 @@
     let model, gestureEstimator;
     const bufferText = [];
     const gestureState = { value: "", time: 0 };
-    const STABLE_TIME = 500; // milliseconds
+    const STABLE_TIME = 250; // Faster stability threshold
+    const CONFIDENCE_THRESHOLD = 9; // Higher confidence = faster detection
 
-    // Gesture-to-sentence map
     const gestureMap = {
       "Hello": "Hello",
       "Help": "I need help",
@@ -142,7 +141,7 @@
 
     async function setupCamera() {
       const constraints = {
-        video: { facingMode: { exact: "environment" } } // back camera only
+        video: { facingMode: { exact: "environment" } }
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
@@ -154,7 +153,7 @@
     async function detectGesture() {
       const hands = await model.estimateHands(video);
       if (hands.length > 0) {
-        const prediction = await gestureEstimator.estimate(hands[0].landmarks, 9);
+        const prediction = await gestureEstimator.estimate(hands[0].landmarks, CONFIDENCE_THRESHOLD);
         if (prediction.gestures.length > 0) {
           const best = prediction.gestures.reduce((a, b) => (a.score > b.score ? a : b));
           const name = best.name;
@@ -181,9 +180,9 @@
       await setupCamera();
       model = await handpose.load();
       gestureEstimator = new fp.GestureEstimator(defineGestures());
-      output.innerText = "Ready to detect gestures";
+      output.innerText = "Ready";
 
-      setInterval(detectGesture, 200); // fast updates
+      setInterval(detectGesture, 100); // 🔥 10 fps detection
     }
 
     main();
