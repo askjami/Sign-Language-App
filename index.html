@@ -3,179 +3,306 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sign Language to Text</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Drawing App</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #111;
-      color: #eee;
+      margin: 10px;
       text-align: center;
-      margin: 0;
-      padding: 0;
     }
-    h1 {
-      font-size: 2em;
-      margin-top: 20px;
+    #canvas-container {
+      border: 2px solid black;
+      display: inline-block;
+      position: relative;
     }
-    #webcam {
-      margin-top: 20px;
-      border: 2px solid #ccc;
-      width: 90vw;
-      max-width: 640px;
+    canvas {
+      background-color: #ddd;
+      cursor: crosshair;
+      max-width: 100%;
       height: auto;
-      aspect-ratio: 4 / 3;
     }
-    #output, #buffer {
-      font-size: 1.5em;
-      margin: 15px auto;
-      color: #00ff90;
-      max-width: 90vw;
-      word-wrap: break-word;
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 10px;
     }
-    #clear {
-      background: #00ff90;
-      border: none;
-      padding: 10px 20px;
-      font-size: 1em;
-      margin-bottom: 20px;
-      cursor: pointer;
-      border-radius: 5px;
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    input, button, select {
+      padding: 6px;
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    button {
+      min-width: 100px;
     }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.min.js"></script>
 </head>
 <body>
-  <h1>Sign Language to Text</h1>
-  <video id="webcam" autoplay playsinline></video>
-  <div id="output">Loading model...</div>
-  <div id="buffer"></div>
-  <button id="clear">Clear</button>
 
-  <!-- TensorFlow & Fingerpose -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
-  <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
+  <div id="canvas-container">
+    <canvas id="animationCanvas" width="400" height="400"></canvas>
+  </div>
 
-  <!-- Define all gestures -->
+  <div class="controls">
+    <div class="control-group">
+      <label>Brush Size</label>
+      <input type="number" id="brushSize" value="5" min="1" max="50"/>
+    </div>
+    <div class="control-group">
+      <label>Color</label>
+      <input type="color" id="drawColor" value="#000000"/>
+    </div>
+    <div class="control-group">
+      <label>Shape</label>
+      <select id="shapeSelect">
+        <option value="circle">Circle</option>
+        <option value="square">Square</option>
+        <option value="line">Line</option>
+        <option value="triangle">Triangle</option>
+        <option value="star">Star</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <button onclick="toggleEraser()">Toggle Eraser</button>
+      <button onclick="undoLastAction()">Undo</button>
+      <button onclick="resetCanvas()">Reset</button>
+    </div>
+    <div class="control-group">
+      <button onclick="saveFrame()">Save Frame</button>
+      <button onclick="insertFrame()">Insert Frame</button>
+      <button onclick="deleteFrame()">Delete Frame</button>
+    </div>
+    <div class="control-group">
+      <label>Speed (ms)</label>
+      <input type="number" id="frameSpeed" value="100" min="10" max="1000"/>
+      <button onclick="startAnimation()">Play</button>
+      <button onclick="stopAnimation()">Stop</button>
+    </div>
+    <div class="control-group">
+      <label>Edit Frame</label>
+      <select id="frameSelector"></select>
+      <button onclick="editSelectedFrame()">Edit</button>
+    </div>
+    <div class="control-group">
+      <button onclick="exportGIF()">Export GIF</button>
+    </div>
+    <div class="control-group">
+      <span>Frames: <span id="frameCount">0</span>/50</span>
+    </div>
+  </div>
+
   <script>
-    const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
+    const canvas = document.getElementById('animationCanvas');
+    const ctx = canvas.getContext('2d');
 
-    // Helper to create basic curl pattern
-    function makeGesture(name, pattern) {
-      const g = new GestureDescription(name);
-      pattern.forEach(([finger, curl]) => g.addCurl(finger, curl, 1.0));
-      return g;
+    let drawing = false;
+    let savedFrames = [];
+    let animationInterval = null;
+    let isEraser = false;
+    let startX, startY;
+
+    canvas.addEventListener('mousedown', (e) => {
+      drawing = true;
+      startX = e.offsetX;
+      startY = e.offsetY;
+      if (getShape() !== 'line') handleDrawOrErase(startX, startY);
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (drawing && getShape() !== 'line') {
+        handleDrawOrErase(e.offsetX, e.offsetY);
+      }
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+      if (drawing && getShape() === 'line') {
+        drawLine(startX, startY, e.offsetX, e.offsetY);
+      }
+      drawing = false;
+    });
+
+    canvas.addEventListener('mouseleave', () => drawing = false);
+
+    function getBrushSize() {
+      return parseInt(document.getElementById('brushSize').value) || 5;
     }
 
-    function defineAllGestures() {
-      const gestures = [];
+    function getDrawColor() {
+      return document.getElementById('drawColor').value;
+    }
 
-      // A-Z letters (simplified approximations)
-      const letters = {};
-      for (let c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
-        const g = new GestureDescription(c);
-        Finger.all.forEach(f => g.addCurl(f, FingerCurl.HalfCurl, 1.0));
-        g.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0); // distinguish a bit
-        letters[c] = g;
-        gestures.push(g);
+    function getShape() {
+      return document.getElementById('shapeSelect').value;
+    }
+
+    function handleDrawOrErase(x, y) {
+      const size = getBrushSize();
+      const shape = getShape();
+      const color = getDrawColor();
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+
+      if (isEraser) {
+        ctx.clearRect(x - size, y - size, size * 2, size * 2);
+        return;
       }
 
-      // Words
-      function wordGesture(name, curls = {}) {
-        const g = new GestureDescription(name);
-        Finger.all.forEach(f => {
-          g.addCurl(f, curls[f] || FingerCurl.NoCurl, 1.0);
-        });
-        return g;
+      if (shape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (shape === 'square') {
+        ctx.fillRect(x - size / 2, y - size / 2, size, size);
+      } else if (shape === 'triangle') {
+        ctx.beginPath();
+        ctx.moveTo(x, y - size);
+        ctx.lineTo(x - size, y + size);
+        ctx.lineTo(x + size, y + size);
+        ctx.closePath();
+        ctx.fill();
+      } else if (shape === 'star') {
+        drawStar(ctx, x, y, 5, size, size / 2);
       }
-
-      gestures.push(wordGesture("Hello"));
-      gestures.push(wordGesture("Yes", { [Finger.Thumb]: FingerCurl.FullCurl }));
-      gestures.push(wordGesture("No", { [Finger.Index]: FingerCurl.NoCurl, [Finger.Middle]: FingerCurl.NoCurl }));
-      gestures.push(wordGesture("Thanks"));
-      gestures.push(wordGesture("Please"));
-      gestures.push(wordGesture("Stop"));
-      gestures.push(wordGesture("Love", {
-        [Finger.Index]: FingerCurl.NoCurl,
-        [Finger.Pinky]: FingerCurl.NoCurl,
-        [Finger.Thumb]: FingerCurl.NoCurl,
-        [Finger.Middle]: FingerCurl.FullCurl,
-        [Finger.Ring]: FingerCurl.FullCurl
-      }));
-      gestures.push(wordGesture("Help", {
-        [Finger.Thumb]: FingerCurl.NoCurl,
-        [Finger.Index]: FingerCurl.FullCurl,
-        [Finger.Middle]: FingerCurl.FullCurl,
-        [Finger.Ring]: FingerCurl.FullCurl,
-        [Finger.Pinky]: FingerCurl.FullCurl
-      }));
-      gestures.push(wordGesture("Fine"));
-      gestures.push(wordGesture("Good"));
-
-      return gestures;
     }
-  </script>
 
-  <!-- Main App -->
-  <script>
-    const video = document.getElementById('webcam');
-    const output = document.getElementById('output');
-    const bufferEl = document.getElementById('buffer');
-    const clearBtn = document.getElementById('clear');
-    let bufferText = '';
-    let lastDetected = '';
-    let lastTime = 0;
+    function drawLine(x1, y1, x2, y2) {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
 
-    async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user' }
+    function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+      let rot = Math.PI / 2 * 3;
+      let step = Math.PI / spikes;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - outerRadius);
+      for (let i = 0; i < spikes; i++) {
+        ctx.lineTo(cx + Math.cos(rot) * outerRadius, cy + Math.sin(rot) * outerRadius);
+        rot += step;
+        ctx.lineTo(cx + Math.cos(rot) * innerRadius, cy + Math.sin(rot) * innerRadius);
+        rot += step;
+      }
+      ctx.lineTo(cx, cy - outerRadius);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function toggleEraser() {
+      isEraser = !isEraser;
+      canvas.style.cursor = isEraser ? 'not-allowed' : 'crosshair';
+    }
+
+    function undoLastAction() {
+      resetCanvas();
+    }
+
+    function resetCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function saveFrame() {
+      if (savedFrames.length >= 50) return alert('Max 50 frames');
+      savedFrames.push(canvas.toDataURL());
+      updateFrameUI();
+    }
+
+    function insertFrame() {
+      if (savedFrames.length >= 50) return alert('Max 50 frames');
+      savedFrames.push(canvas.toDataURL());
+      updateFrameUI();
+    }
+
+    function deleteFrame() {
+      savedFrames.pop();
+      updateFrameUI();
+    }
+
+    function updateFrameUI() {
+      document.getElementById('frameCount').innerText = savedFrames.length;
+      const selector = document.getElementById('frameSelector');
+      selector.innerHTML = '';
+      savedFrames.forEach((_, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = `Frame ${i + 1}`;
+        selector.appendChild(opt);
       });
-      video.srcObject = stream;
-      return new Promise(resolve => {
-        video.onloadedmetadata = () => resolve(video);
+    }
+
+    function editSelectedFrame() {
+      const index = parseInt(document.getElementById('frameSelector').value);
+      if (!isNaN(index) && savedFrames[index]) {
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+        };
+        img.src = savedFrames[index];
+      }
+    }
+
+    function startAnimation() {
+      const speed = parseInt(document.getElementById('frameSpeed').value) || 100;
+      let current = 0;
+      stopAnimation();
+      animationInterval = setInterval(() => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+        };
+        img.src = savedFrames[current];
+        current = (current + 1) % savedFrames.length;
+      }, speed);
+    }
+
+    function stopAnimation() {
+      clearInterval(animationInterval);
+    }
+
+    function exportGIF() {
+      if (savedFrames.length === 0) return alert('No frames to export');
+      const gif = new GIF({
+        workers: 2,
+        quality: 10,
+        workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+      });
+
+      const speed = parseInt(document.getElementById('frameSpeed').value) || 100;
+
+      let loaded = 0;
+      savedFrames.forEach((dataURL, index) => {
+        const img = new Image();
+        img.src = dataURL;
+        img.onload = () => {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = canvas.width;
+          tempCanvas.height = canvas.height;
+          const tempCtx = tempCanvas.getContext('2d');
+          tempCtx.drawImage(img, 0, 0);
+          gif.addFrame(tempCtx, {copy: true, delay: speed});
+          loaded++;
+          if (loaded === savedFrames.length) gif.render();
+        };
+      });
+
+      gif.on('finished', function(blob) {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'animation.gif';
+        link.click();
       });
     }
-
-    async function main() {
-      await setupCamera();
-      await tf.setBackend('webgl');
-      await tf.ready();
-
-      const model = await handpose.load();
-      const gestureList = defineAllGestures();
-      const GE = new fp.GestureEstimator(gestureList);
-      output.innerText = 'Model Loaded';
-
-      setInterval(async () => {
-        const predictions = await model.estimateHands(video);
-        if (predictions.length > 0) {
-          const result = await GE.estimate(predictions[0].landmarks, 8);
-          if (result.gestures.length > 0) {
-            const gesture = result.gestures.reduce((p, c) => (p.score > c.score ? p : c));
-            output.innerText = `Detected: ${gesture.name}`;
-
-            const now = Date.now();
-            if (gesture.name !== lastDetected || now - lastTime > 2000) {
-              bufferText += gesture.name + ' ';
-              bufferEl.innerText = bufferText.trim();
-              lastDetected = gesture.name;
-              lastTime = now;
-            }
-          } else {
-            output.innerText = 'No gesture detected';
-          }
-        } else {
-          output.innerText = 'No hand detected';
-        }
-      }, 300);
-    }
-
-    clearBtn.onclick = () => {
-      bufferText = '';
-      bufferEl.innerText = '';
-    };
-
-    main();
   </script>
 </body>
 </html>
