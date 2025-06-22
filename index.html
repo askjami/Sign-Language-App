@@ -1,308 +1,150 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Drawing App</title>
+  <title>Sign Language to Text</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      margin: 10px;
+      background: #111;
+      color: #eee;
       text-align: center;
+      margin: 0;
+      padding: 0;
     }
-    #canvas-container {
-      border: 2px solid black;
-      display: inline-block;
-      position: relative;
+
+    h1 {
+      font-size: 1.8em;
+      margin-top: 20px;
     }
-    canvas {
-      background-color: #ddd;
-      cursor: crosshair;
-      max-width: 100%;
+
+    #webcam {
+      margin-top: 20px;
+      border: 2px solid #ccc;
+      width: 90vw;
+      max-width: 640px;
       height: auto;
+      aspect-ratio: 4 / 3;
     }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 6px;
-      margin-top: 10px;
+
+    #output {
+      font-size: 1.5em;
+      margin: 20px auto;
+      color: #00ff90;
+      max-width: 90vw;
+      word-wrap: break-word;
     }
-    .control-group {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    input, button, select {
-      padding: 6px;
-      font-size: 14px;
-      margin-top: 4px;
-    }
-    button {
-      min-width: 100px;
+
+    @media (min-width: 768px) {
+      h1 { font-size: 2.2em; }
+      #output { font-size: 2em; }
     }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.min.js"></script>
 </head>
 <body>
+  <h1>Sign Language to Text</h1>
+  <video id="webcam" autoplay playsinline></video>
+  <div id="output">Loading model...</div>
 
-  <div id="canvas-container">
-    <canvas id="animationCanvas" width="400" height="400"></canvas>
-  </div>
+  <!-- TensorFlow & Handpose -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
 
-  <div class="controls">
-    <div class="control-group">
-      <label>Brush Size</label>
-      <input type="number" id="brushSize" value="5" min="1" max="50"/>
-    </div>
-    <div class="control-group">
-      <label>Color</label>
-      <input type="color" id="drawColor" value="#000000"/>
-    </div>
-    <div class="control-group">
-      <label>Shape</label>
-      <select id="shapeSelect">
-        <option value="circle">Circle</option>
-        <option value="square">Square</option>
-        <option value="line">Line</option>
-        <option value="triangle">Triangle</option>
-        <option value="star">Star</option>
-      </select>
-    </div>
-    <div class="control-group">
-      <button onclick="toggleEraser()">Toggle Eraser</button>
-      <button onclick="undoLastAction()">Undo</button>
-      <button onclick="resetCanvas()">Reset</button>
-    </div>
-    <div class="control-group">
-      <button onclick="saveFrame()">Save Frame</button>
-      <button onclick="insertFrame()">Insert Frame</button>
-      <button onclick="deleteFrame()">Delete Frame</button>
-    </div>
-    <div class="control-group">
-      <label>Speed (ms)</label>
-      <input type="number" id="frameSpeed" value="100" min="10" max="1000"/>
-      <button onclick="startAnimation()">Play</button>
-      <button onclick="stopAnimation()">Stop</button>
-    </div>
-    <div class="control-group">
-      <label>Edit Frame</label>
-      <select id="frameSelector"></select>
-      <button onclick="editSelectedFrame()">Edit</button>
-    </div>
-    <div class="control-group">
-      <button onclick="exportGIF()">Export GIF</button>
-    </div>
-    <div class="control-group">
-      <span>Frames: <span id="frameCount">0</span>/50</span>
-    </div>
-  </div>
+  <!-- Fingerpose -->
+  <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
 
+  <!-- Gesture Definitions -->
   <script>
-    const canvas = document.getElementById('animationCanvas');
-    const ctx = canvas.getContext('2d');
+    const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
 
-    let drawing = false;
-    let savedFrames = [];
-    let animationInterval = null;
-    let isEraser = false;
-    let startX, startY;
+    function defineAlphabetGestures() {
+      const gestures = [];
 
-    canvas.addEventListener('mousedown', (e) => {
-      drawing = true;
-      startX = e.offsetX;
-      startY = e.offsetY;
-      if (getShape() !== 'line') handleDrawOrErase(startX, startY);
-    });
-
-    canvas.addEventListener('mousemove', (e) => {
-      if (drawing && getShape() !== 'line') {
-        handleDrawOrErase(e.offsetX, e.offsetY);
+      // "A"
+      const A = new GestureDescription("A");
+      for (let finger of Finger.all) {
+        A.addCurl(finger, FingerCurl.FullCurl, 1.0);
       }
-    });
+      gestures.push(A);
 
-    canvas.addEventListener('mouseup', (e) => {
-      if (drawing && getShape() === 'line') {
-        drawLine(startX, startY, e.offsetX, e.offsetY);
+      // "B"
+      const B = new GestureDescription("B");
+      for (let finger of [Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky]) {
+        B.addCurl(finger, FingerCurl.NoCurl, 1.0);
+        B.addDirection(finger, FingerDirection.VerticalUp, 0.9);
       }
-      drawing = false;
-    });
+      B.addCurl(Finger.Thumb, FingerCurl.HalfCurl, 0.9);
+      gestures.push(B);
 
-    canvas.addEventListener('mouseleave', () => drawing = false);
-
-    function getBrushSize() {
-      return parseInt(document.getElementById('brushSize').value) || 5;
-    }
-
-    function getDrawColor() {
-      return document.getElementById('drawColor').value;
-    }
-
-    function getShape() {
-      return document.getElementById('shapeSelect').value;
-    }
-
-    function handleDrawOrErase(x, y) {
-      const size = getBrushSize();
-      const shape = getShape();
-      const color = getDrawColor();
-      ctx.fillStyle = color;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = size;
-
-      if (isEraser) {
-        ctx.clearRect(x - size, y - size, size * 2, size * 2);
-        return;
+      // "C"
+      const C = new GestureDescription("C");
+      for (let finger of Finger.all) {
+        C.addCurl(finger, FingerCurl.HalfCurl, 1.0);
       }
+      gestures.push(C);
 
-      if (shape === 'circle') {
-        ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (shape === 'square') {
-        ctx.fillRect(x - size / 2, y - size / 2, size, size);
-      } else if (shape === 'triangle') {
-        ctx.beginPath();
-        ctx.moveTo(x, y - size);
-        ctx.lineTo(x - size, y + size);
-        ctx.lineTo(x + size, y + size);
-        ctx.closePath();
-        ctx.fill();
-      } else if (shape === 'star') {
-        drawStar(ctx, x, y, 5, size, size / 2);
+      // "D"
+      const D = new GestureDescription("D");
+      D.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0);
+      for (let finger of [Finger.Middle, Finger.Ring, Finger.Pinky]) {
+        D.addCurl(finger, FingerCurl.FullCurl, 1.0);
+      }
+      D.addCurl(Finger.Thumb, FingerCurl.HalfCurl, 1.0);
+      gestures.push(D);
+
+      // You can add more here as needed...
+
+      return gestures;
+    }
+  </script>
+
+  <!-- Main Script -->
+  <script>
+    const video = document.getElementById('webcam');
+    const output = document.getElementById('output');
+
+    async function setupCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        return new Promise(resolve => {
+          video.onloadedmetadata = () => resolve(video);
+        });
+      } catch (err) {
+        output.innerText = "Error accessing camera.";
+        console.error("Camera Error:", err);
       }
     }
 
-    function drawLine(x1, y1, x2, y2) {
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
+    async function main() {
+      await setupCamera();
+      await tf.setBackend('webgl');
+      await tf.ready();
+
+      const model = await handpose.load();
+      output.innerText = 'Model Ready';
+
+      const gestures = defineAlphabetGestures();
+      const gestureEstimator = new fp.GestureEstimator(gestures);
+
+      setInterval(async () => {
+        const predictions = await model.estimateHands(video);
+        if (predictions.length > 0) {
+          const est = gestureEstimator.estimate(predictions[0].landmarks, 8.5);
+          if (est.gestures && est.gestures.length > 0) {
+            const best = est.gestures.reduce((a, b) => (a.score > b.score ? a : b));
+            output.innerText = `Detected: ${best.name}`;
+          } else {
+            output.innerText = 'No recognizable gesture';
+          }
+        } else {
+          output.innerText = 'No hand detected';
+        }
+      }, 200);
     }
 
-    function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
-      let rot = Math.PI / 2 * 3;
-      let step = Math.PI / spikes;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy - outerRadius);
-      for (let i = 0; i < spikes; i++) {
-        ctx.lineTo(cx + Math.cos(rot) * outerRadius, cy + Math.sin(rot) * outerRadius);
-        rot += step;
-        ctx.lineTo(cx + Math.cos(rot) * innerRadius, cy + Math.sin(rot) * innerRadius);
-        rot += step;
-      }
-      ctx.lineTo(cx, cy - outerRadius);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    function toggleEraser() {
-      isEraser = !isEraser;
-      canvas.style.cursor = isEraser ? 'not-allowed' : 'crosshair';
-    }
-
-    function undoLastAction() {
-      resetCanvas();
-    }
-
-    function resetCanvas() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-
-    function saveFrame() {
-      if (savedFrames.length >= 50) return alert('Max 50 frames');
-      savedFrames.push(canvas.toDataURL());
-      updateFrameUI();
-    }
-
-    function insertFrame() {
-      if (savedFrames.length >= 50) return alert('Max 50 frames');
-      savedFrames.push(canvas.toDataURL());
-      updateFrameUI();
-    }
-
-    function deleteFrame() {
-      savedFrames.pop();
-      updateFrameUI();
-    }
-
-    function updateFrameUI() {
-      document.getElementById('frameCount').innerText = savedFrames.length;
-      const selector = document.getElementById('frameSelector');
-      selector.innerHTML = '';
-      savedFrames.forEach((_, i) => {
-        const opt = document.createElement('option');
-        opt.value = i;
-        opt.textContent = `Frame ${i + 1}`;
-        selector.appendChild(opt);
-      });
-    }
-
-    function editSelectedFrame() {
-      const index = parseInt(document.getElementById('frameSelector').value);
-      if (!isNaN(index) && savedFrames[index]) {
-        const img = new Image();
-        img.onload = () => {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
-        };
-        img.src = savedFrames[index];
-      }
-    }
-
-    function startAnimation() {
-      const speed = parseInt(document.getElementById('frameSpeed').value) || 100;
-      let current = 0;
-      stopAnimation();
-      animationInterval = setInterval(() => {
-        const img = new Image();
-        img.onload = () => {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
-        };
-        img.src = savedFrames[current];
-        current = (current + 1) % savedFrames.length;
-      }, speed);
-    }
-
-    function stopAnimation() {
-      clearInterval(animationInterval);
-    }
-
-    function exportGIF() {
-      if (savedFrames.length === 0) return alert('No frames to export');
-      const gif = new GIF({
-        workers: 2,
-        quality: 10,
-        workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
-      });
-
-      const speed = parseInt(document.getElementById('frameSpeed').value) || 100;
-
-      let loaded = 0;
-      savedFrames.forEach((dataURL, index) => {
-        const img = new Image();
-        img.src = dataURL;
-        img.onload = () => {
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = canvas.width;
-          tempCanvas.height = canvas.height;
-          const tempCtx = tempCanvas.getContext('2d');
-          tempCtx.drawImage(img, 0, 0);
-          gif.addFrame(tempCtx, {copy: true, delay: speed});
-          loaded++;
-          if (loaded === savedFrames.length) gif.render();
-        };
-      });
-
-      gif.on('finished', function(blob) {
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = 'animation.gif';
-        link.click();
-      });
-    }
+    main();
   </script>
 </body>
 </html>
