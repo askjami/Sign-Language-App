@@ -13,38 +13,29 @@
       margin: 0;
       padding: 0;
     }
-
     h1 {
-      font-size: 1.8em;
-      margin-top: 20px;
+      font-size: 2em;
+      margin: 20px 0;
     }
-
     #webcam {
-      margin-top: 20px;
       border: 2px solid #ccc;
       width: 90vw;
       max-width: 640px;
       height: auto;
-      aspect-ratio: 4 / 3;
+      aspect-ratio: 4/3;
+      margin-bottom: 10px;
+      transform: scaleX(-1); /* Mirror for front cam */
     }
-
     #output {
-      font-size: 1.5em;
-      margin: 20px auto;
+      font-size: 2em;
+      margin: 10px auto;
       color: #00ff90;
-      max-width: 90vw;
-      word-wrap: break-word;
-    }
-
-    @media (min-width: 768px) {
-      h1 { font-size: 2.2em; }
-      #output { font-size: 2em; }
     }
   </style>
 </head>
 <body>
-  <h1>Sign Language to Text</h1>
-  <video id="webcam" autoplay playsinline></video>
+  <h1>Sign Language to Text (Front Camera)</h1>
+  <video id="webcam" autoplay playsinline muted></video>
   <div id="output">Loading model...</div>
 
   <!-- TensorFlow & Handpose -->
@@ -54,97 +45,83 @@
   <!-- Fingerpose -->
   <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
 
-  <!-- Gesture Definitions -->
   <script>
     const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
 
-    function defineAlphabetGestures() {
-      const gestures = [];
-
-      // "A"
-      const A = new GestureDescription("A");
-      for (let finger of Finger.all) {
-        A.addCurl(finger, FingerCurl.FullCurl, 1.0);
-      }
-      gestures.push(A);
-
-      // "B"
-      const B = new GestureDescription("B");
-      for (let finger of [Finger.Index, Finger.Middle, Finger.Ring, Finger.Pinky]) {
-        B.addCurl(finger, FingerCurl.NoCurl, 1.0);
-        B.addDirection(finger, FingerDirection.VerticalUp, 0.9);
-      }
-      B.addCurl(Finger.Thumb, FingerCurl.HalfCurl, 0.9);
-      gestures.push(B);
-
-      // "C"
-      const C = new GestureDescription("C");
-      for (let finger of Finger.all) {
-        C.addCurl(finger, FingerCurl.HalfCurl, 1.0);
-      }
-      gestures.push(C);
-
-      // "D"
-      const D = new GestureDescription("D");
-      D.addCurl(Finger.Index, FingerCurl.NoCurl, 1.0);
-      for (let finger of [Finger.Middle, Finger.Ring, Finger.Pinky]) {
-        D.addCurl(finger, FingerCurl.FullCurl, 1.0);
-      }
-      D.addCurl(Finger.Thumb, FingerCurl.HalfCurl, 1.0);
-      gestures.push(D);
-
-      // You can add more here as needed...
-
-      return gestures;
+    function makeLetterGesture(letter, curls, dirs = {}) {
+      const g = new GestureDescription(letter);
+      curls.forEach(c => g.addCurl(c.finger, c.curl, 1.0));
+      (dirs[letter] || []).forEach(d => g.addDirection(d.finger, d.direction, 0.8));
+      return g;
     }
-  </script>
 
-  <!-- Main Script -->
-  <script>
-    const video = document.getElementById('webcam');
-    const output = document.getElementById('output');
+    function defineASL() {
+      const gm = [];
+      // A
+      gm.push(makeLetterGesture("A", Finger.all.map(f => ({finger: f, curl: FingerCurl.FullCurl}))));
+      // B
+      gm.push(makeLetterGesture("B",
+        Finger.all.filter(f => f !== Finger.Thumb).map(f=>({finger:f, curl:FingerCurl.NoCurl}))
+        .concat([{finger:Finger.Thumb,curl:FingerCurl.HalfCurl}]),
+        { B: Finger.all.filter(f=>f!==Finger.Thumb).map(f=>({finger:f,direction:FingerDirection.VerticalUp})) }
+      ));
+      // C
+      gm.push(makeLetterGesture("C", Finger.all.map(f=>({finger:f, curl:FingerCurl.HalfCurl}))));
+      // D
+      gm.push(makeLetterGesture("D",
+        [ {finger: Finger.Index, curl: FingerCurl.NoCurl} ]
+        .concat([Finger.Middle, Finger.Ring, Finger.Pinky].map(f=>({finger: f, curl: FingerCurl.FullCurl})))
+        .concat([{finger:Finger.Thumb,curl:FingerCurl.HalfCurl}])
+      ));
+      // E–Z (generic approx gestures)
+      const others = "EFGHIJKLMNOPQRSTUVWXYZ".split("");
+      others.forEach(L => {
+        const curls = Finger.all.map(f=>({finger:f, curl:FingerCurl.HalfCurl}));
+        gm.push(makeLetterGesture(L, curls));
+      });
+      return gm;
+    }
 
     async function setupCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
-        return new Promise(resolve => {
-          video.onloadedmetadata = () => resolve(video);
-        });
-      } catch (err) {
-        output.innerText = "Error accessing camera.";
-        console.error("Camera Error:", err);
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" }, // front camera
+        audio: false
+      });
+      const video = document.getElementById('webcam');
+      video.srcObject = stream;
+      return new Promise(res => video.onloadedmetadata = () => res(video));
     }
 
     async function main() {
-      await setupCamera();
+      const video = await setupCamera();
       await tf.setBackend('webgl');
       await tf.ready();
 
       const model = await handpose.load();
-      output.innerText = 'Model Ready';
+      document.getElementById('output').innerText = "Model ready. Show ASL letters A–Z";
 
-      const gestures = defineAlphabetGestures();
-      const gestureEstimator = new fp.GestureEstimator(gestures);
+      const estimator = new fp.GestureEstimator(defineASL());
 
       setInterval(async () => {
-        const predictions = await model.estimateHands(video);
-        if (predictions.length > 0) {
-          const est = gestureEstimator.estimate(predictions[0].landmarks, 8.5);
-          if (est.gestures && est.gestures.length > 0) {
-            const best = est.gestures.reduce((a, b) => (a.score > b.score ? a : b));
-            output.innerText = `Detected: ${best.name}`;
-          } else {
-            output.innerText = 'No recognizable gesture';
-          }
+        const pred = await model.estimateHands(video);
+        if (!pred.length) {
+          output.innerText = "No hand detected";
+          return;
+        }
+        const est = estimator.estimate(pred[0].landmarks, 9.5);
+        if (est.gestures.length) {
+          const b = est.gestures.reduce((a,b) => (a.score > b.score ? a : b));
+          output.innerText = `Detected: ${b.name}`;
         } else {
-          output.innerText = 'No hand detected';
+          output.innerText = "Gesture unrecognized";
         }
       }, 200);
     }
 
-    main();
+    main().catch(err => {
+      console.error(err);
+      document.getElementById('output').innerText = "Error initializing. See console.";
+    });
   </script>
 </body>
 </html>
