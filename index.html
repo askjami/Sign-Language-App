@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Sign Language to Text</title>
+  <title>Sign Language to Text – Version 1.1</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -13,30 +13,60 @@
       margin: 0;
       padding: 0;
     }
+
     h1 {
       font-size: 2em;
-      margin: 20px 0;
+      margin: 20px 0 10px;
     }
-    #webcam {
+
+    #version {
+      font-size: 1em;
+      color: #888;
+      margin-bottom: 10px;
+    }
+
+    video {
       border: 2px solid #ccc;
       width: 90vw;
       max-width: 640px;
-      height: auto;
-      aspect-ratio: 4/3;
+      aspect-ratio: 4 / 3;
       margin-bottom: 10px;
-      transform: scaleX(-1); /* Mirror for front cam */
+      transform: scaleX(-1); /* Mirror for front camera */
     }
+
     #output {
       font-size: 2em;
-      margin: 10px auto;
       color: #00ff90;
+      margin-bottom: 10px;
+    }
+
+    .toggle-container {
+      margin: 10px auto;
+    }
+
+    .toggle-button {
+      padding: 10px 20px;
+      font-size: 1em;
+      background: #00ff90;
+      color: #111;
+      border: none;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+
+    .toggle-button:hover {
+      background-color: #00cc70;
     }
   </style>
 </head>
 <body>
-  <h1>Sign Language to Text (Front Camera)</h1>
+  <h1>Sign Language to Text</h1>
+  <div id="version">Version 1.1</div>
   <video id="webcam" autoplay playsinline muted></video>
   <div id="output">Loading model...</div>
+  <div class="toggle-container">
+    <button id="toggleCamera" class="toggle-button">Switch Camera</button>
+  </div>
 
   <!-- TensorFlow & Handpose -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
@@ -46,82 +76,123 @@
   <script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
 
   <script>
+    const video = document.getElementById("webcam");
+    const output = document.getElementById("output");
+    const toggleBtn = document.getElementById("toggleCamera");
+
     const { GestureDescription, Finger, FingerCurl, FingerDirection } = window.fp;
 
+    let currentFacingMode = "user"; // Default to front
+    let stream;
+    let model;
+    let gestureInterval;
+
     function makeLetterGesture(letter, curls, dirs = {}) {
-      const g = new GestureDescription(letter);
-      curls.forEach(c => g.addCurl(c.finger, c.curl, 1.0));
-      (dirs[letter] || []).forEach(d => g.addDirection(d.finger, d.direction, 0.8));
-      return g;
+      const gesture = new GestureDescription(letter);
+      curls.forEach(c => gesture.addCurl(c.finger, c.curl, 1.0));
+      (dirs[letter] || []).forEach(d => gesture.addDirection(d.finger, d.direction, 0.8));
+      return gesture;
     }
 
     function defineASL() {
-      const gm = [];
+      const gestures = [];
+
       // A
-      gm.push(makeLetterGesture("A", Finger.all.map(f => ({finger: f, curl: FingerCurl.FullCurl}))));
+      gestures.push(makeLetterGesture("A", Finger.all.map(f => ({ finger: f, curl: FingerCurl.FullCurl }))));
+
       // B
-      gm.push(makeLetterGesture("B",
-        Finger.all.filter(f => f !== Finger.Thumb).map(f=>({finger:f, curl:FingerCurl.NoCurl}))
-        .concat([{finger:Finger.Thumb,curl:FingerCurl.HalfCurl}]),
-        { B: Finger.all.filter(f=>f!==Finger.Thumb).map(f=>({finger:f,direction:FingerDirection.VerticalUp})) }
+      gestures.push(makeLetterGesture("B",
+        Finger.all.filter(f => f !== Finger.Thumb).map(f => ({ finger: f, curl: FingerCurl.NoCurl }))
+        .concat([{ finger: Finger.Thumb, curl: FingerCurl.HalfCurl }]),
+        { B: Finger.all.filter(f => f !== Finger.Thumb).map(f => ({ finger: f, direction: FingerDirection.VerticalUp })) }
       ));
+
       // C
-      gm.push(makeLetterGesture("C", Finger.all.map(f=>({finger:f, curl:FingerCurl.HalfCurl}))));
+      gestures.push(makeLetterGesture("C", Finger.all.map(f => ({ finger: f, curl: FingerCurl.HalfCurl }))));
+
       // D
-      gm.push(makeLetterGesture("D",
-        [ {finger: Finger.Index, curl: FingerCurl.NoCurl} ]
-        .concat([Finger.Middle, Finger.Ring, Finger.Pinky].map(f=>({finger: f, curl: FingerCurl.FullCurl})))
-        .concat([{finger:Finger.Thumb,curl:FingerCurl.HalfCurl}])
+      gestures.push(makeLetterGesture("D",
+        [{ finger: Finger.Index, curl: FingerCurl.NoCurl }]
+        .concat([Finger.Middle, Finger.Ring, Finger.Pinky].map(f => ({ finger: f, curl: FingerCurl.FullCurl })))
+        .concat([{ finger: Finger.Thumb, curl: FingerCurl.HalfCurl }])
       ));
-      // E–Z (generic approx gestures)
-      const others = "EFGHIJKLMNOPQRSTUVWXYZ".split("");
-      others.forEach(L => {
-        const curls = Finger.all.map(f=>({finger:f, curl:FingerCurl.HalfCurl}));
-        gm.push(makeLetterGesture(L, curls));
+
+      // E–Z (approximations)
+      const rest = "EFGHIJKLMNOPQRSTUVWXYZ".split("");
+      rest.forEach(letter => {
+        const curls = Finger.all.map(f => ({ finger: f, curl: FingerCurl.HalfCurl }));
+        gestures.push(makeLetterGesture(letter, curls));
       });
-      return gm;
+
+      return gestures;
     }
 
-    async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" }, // front camera
-        audio: false
-      });
-      const video = document.getElementById('webcam');
-      video.srcObject = stream;
-      return new Promise(res => video.onloadedmetadata = () => res(video));
+    async function setupCamera(facingMode = "user") {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: facingMode } },
+          audio: false
+        });
+
+        video.srcObject = stream;
+        if (facingMode === "user") {
+          video.style.transform = "scaleX(-1)";
+        } else {
+          video.style.transform = "none";
+        }
+
+        return new Promise(resolve => {
+          video.onloadedmetadata = () => resolve(video);
+        });
+      } catch (err) {
+        output.innerText = "Camera access error.";
+        console.error("Camera error:", err);
+      }
     }
 
-    async function main() {
-      const video = await setupCamera();
-      await tf.setBackend('webgl');
-      await tf.ready();
+    async function startApp(facingMode = "user") {
+      output.innerText = "Loading camera...";
+      clearInterval(gestureInterval);
 
-      const model = await handpose.load();
-      document.getElementById('output').innerText = "Model ready. Show ASL letters A–Z";
+      await setupCamera(facingMode);
+      if (!model) {
+        await tf.setBackend("webgl");
+        await tf.ready();
+        model = await handpose.load();
+      }
 
-      const estimator = new fp.GestureEstimator(defineASL());
+      output.innerText = "Model Ready. Show an ASL letter.";
 
-      setInterval(async () => {
-        const pred = await model.estimateHands(video);
-        if (!pred.length) {
-          output.innerText = "No hand detected";
+      const gestures = defineASL();
+      const estimator = new fp.GestureEstimator(gestures);
+
+      gestureInterval = setInterval(async () => {
+        const predictions = await model.estimateHands(video);
+        if (predictions.length === 0) {
+          output.innerText = "No hand detected.";
           return;
         }
-        const est = estimator.estimate(pred[0].landmarks, 9.5);
-        if (est.gestures.length) {
-          const b = est.gestures.reduce((a,b) => (a.score > b.score ? a : b));
-          output.innerText = `Detected: ${b.name}`;
+
+        const estimation = estimator.estimate(predictions[0].landmarks, 9.5);
+        if (estimation.gestures.length > 0) {
+          const result = estimation.gestures.reduce((a, b) => (a.score > b.score ? a : b));
+          output.innerText = `Detected: ${result.name}`;
         } else {
-          output.innerText = "Gesture unrecognized";
+          output.innerText = "Gesture unrecognized.";
         }
       }, 200);
     }
 
-    main().catch(err => {
-      console.error(err);
-      document.getElementById('output').innerText = "Error initializing. See console.";
+    toggleBtn.addEventListener("click", () => {
+      currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
+      startApp(currentFacingMode);
     });
+
+    startApp(currentFacingMode);
   </script>
 </body>
 </html>
