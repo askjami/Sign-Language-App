@@ -3,41 +3,31 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Blind Navigation Camera App</title>
+  <title>Blind Navigation App</title>
   <style>
     body {
-      margin: 0;
-      font-family: sans-serif;
       background: #000;
-      color: #fff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      color: white;
+      font-family: Arial;
+      text-align: center;
+      margin: 0;
+      padding: 10px;
     }
-    video, canvas {
+    video {
       width: 100%;
       max-width: 640px;
-      height: auto;
-      border: 2px solid #fff;
-    }
-    #status {
-      margin: 10px;
-      font-size: 1.2em;
-      text-align: center;
+      border: 3px solid #fff;
     }
     button {
+      margin: 10px;
       padding: 10px 20px;
-      font-size: 1em;
-      margin: 5px;
     }
   </style>
 </head>
 <body>
-  <h1>Blind Navigation Camera App</h1>
-  <video id="video" autoplay muted playsinline></video>
-  <canvas id="canvas" style="display:none;"></canvas>
-  <div id="status">Loading model...</div>
+  <h2>Blind Navigation Camera App</h2>
+  <video id="video" autoplay playsinline muted></video>
+  <div id="status">Loading...</div>
   <button onclick="toggleDetection()">Toggle Detection</button>
   <button onclick="switchCamera()">Switch Camera</button>
 
@@ -45,50 +35,33 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <script>
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
     const status = document.getElementById('status');
-
-    let model = null;
-    let detecting = false;
-    let lastSpoken = "";
-    let currentStream = null;
+    let model, stream, detecting = false;
     let usingFrontCamera = false;
+    let lastSpoken = '';
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
 
-    async function setupCamera() {
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
-      }
-
-      const constraints = {
-        video: {
-          facingMode: usingFrontCamera ? 'user' : 'environment'
-        },
-        audio: false
-      };
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        currentStream = stream;
-        video.srcObject = stream;
-        return new Promise(resolve => {
-          video.onloadedmetadata = () => resolve();
-        });
-      } catch (err) {
-        status.innerText = 'Camera access denied or not available.';
-        console.error(err);
+    async function speak(text) {
+      if (text !== lastSpoken && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(msg);
+        lastSpoken = text;
       }
     }
 
-    function speak(text) {
-      if ('speechSynthesis' in window) {
-        if (text !== lastSpoken) {
-          const msg = new SpeechSynthesisUtterance(text);
-          window.speechSynthesis.cancel(); // Stop ongoing speech
-          window.speechSynthesis.speak(msg);
-          lastSpoken = text;
-        }
-      }
+    async function setupCamera() {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: usingFrontCamera ? 'user' : 'environment' }
+      });
+      video.srcObject = stream;
+
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve();
+      });
     }
 
     async function detectFrame() {
@@ -97,14 +70,28 @@
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+      // Object Detection
       const predictions = await model.detect(canvas);
       const objects = predictions.map(p => p.class);
       if (objects.length > 0) {
-        const announcement = `I see ${[...new Set(objects)].join(', ')}`;
+        const announcement = "I see " + [...new Set(objects)].join(', ');
         speak(announcement);
         status.innerText = announcement;
       } else {
-        status.innerText = "No objects detected.";
+        status.innerText = "Scanning...";
+      }
+
+      // Simulated wall detection
+      const imageData = ctx.getImageData(canvas.width / 2 - 50, canvas.height / 2 - 50, 100, 100).data;
+      let brightnessSum = 0;
+      for (let i = 0; i < imageData.length; i += 4) {
+        brightnessSum += (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+      }
+      const avgBrightness = brightnessSum / (imageData.length / 4);
+
+      if (avgBrightness < 50) {
+        speak("Warning! Obstacle ahead.");
+        status.innerText = "Obstacle detected!";
       }
 
       requestAnimationFrame(detectFrame);
@@ -112,7 +99,7 @@
 
     async function toggleDetection() {
       detecting = !detecting;
-      status.innerText = detecting ? "Detecting..." : "Detection paused.";
+      status.innerText = detecting ? "Detecting..." : "Paused.";
       if (detecting) detectFrame();
     }
 
@@ -122,11 +109,10 @@
       if (detecting) detectFrame();
     }
 
-    // Initial setup
     (async () => {
       await setupCamera();
       model = await cocoSsd.load();
-      status.innerText = "Model loaded. Tap button to start detection.";
+      status.innerText = "Model ready. Press 'Toggle Detection' to start.";
     })();
   </script>
 </body>
